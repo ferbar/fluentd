@@ -82,7 +82,7 @@ module Fluent
           elsif skip(/\</)
             e_name = scan(ELEMENT_NAME)
             spacing
-            e_arg = scan_nonquoted_string(/(?:#{ZERO_OR_MORE_SPACING}\>)/)
+            e_arg = scan_string(/(?:#{ZERO_OR_MORE_SPACING}\>)/)
             spacing
             unless skip(/\>/)
               parse_error! "expected '>'"
@@ -147,11 +147,13 @@ module Fluent
       end
 
       def eval_include(attrs, elems, uri)
-        u = URI.parse(uri)
-        if u.scheme == 'file' || (!u.scheme.nil? && u.scheme.length == 1) || u.path == uri # file path
+        # replace space(s)(' ') with '+' to prevent invalid uri due to space(s).
+        # See: https://github.com/fluent/fluentd/pull/2780#issuecomment-576081212
+        u = URI.parse(uri.gsub(/ /, '+'))
+        if u.scheme == 'file' || (!u.scheme.nil? && u.scheme.length == 1) || u.path == uri.gsub(/ /, '+') # file path
           # When the Windows absolute path then u.scheme.length == 1
           # e.g. C:
-          path = u.path
+          path = URI.decode_www_form_component(u.path)
           if path[0] != ?/
             pattern = File.expand_path("#{@include_basepath}/#{path}")
           else
@@ -174,9 +176,8 @@ module Fluent
           ss = StringScanner.new(data)
           V1Parser.new(ss, basepath, fname, @eval_context).parse_element(true, nil, attrs, elems)
         end
-
       rescue SystemCallError => e
-        cpe = ConfigParseError.new("include error #{uri}")
+        cpe = ConfigParseError.new("include error #{uri} - #{e}")
         cpe.set_backtrace(e.backtrace)
         raise cpe
       end

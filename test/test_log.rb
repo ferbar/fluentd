@@ -12,7 +12,7 @@ class LogTest < Test::Unit::TestCase
     FileUtils.rm_rf(TMP_DIR)
     FileUtils.mkdir_p(TMP_DIR)
     @log_device = Fluent::Test::DummyLogDevice.new
-    @timestamp = Time.parse("2016-04-21 11:58:41 +0900")
+    @timestamp = Time.parse("2016-04-21 02:58:41 +0000")
     @timestamp_str = @timestamp.strftime("%Y-%m-%d %H:%M:%S %z")
     Timecop.freeze(@timestamp)
   end
@@ -367,6 +367,50 @@ class LogTest < Test::Unit::TestCase
     end
   end
 
+  sub_test_case "ignore_repeated_log_interval" do
+    def test_same_message
+      message = "This is test"
+      logger = ServerEngine::DaemonLogger.new(@log_device, {log_level: ServerEngine::DaemonLogger::INFO})
+      log = Fluent::Log.new(logger, {ignore_repeated_log_interval: 5})
+
+      log.error message
+      10.times { |i|
+        Timecop.freeze(@timestamp + i)
+        log.error message
+      }
+
+      expected = [
+        "2016-04-21 02:58:41 +0000 [error]: This is test\n",
+        "2016-04-21 02:58:47 +0000 [error]: This is test\n"
+      ]
+      assert_equal(expected, log.out.logs)
+    end
+
+    def test_different_message
+      message = "This is test"
+      logger = ServerEngine::DaemonLogger.new(@log_device, {log_level: ServerEngine::DaemonLogger::INFO})
+      log = Fluent::Log.new(logger, {ignore_repeated_log_interval: 10})
+
+      log.error message
+      3.times { |i|
+        Timecop.freeze(@timestamp + i)
+        log.error message
+        log.error message
+        log.info "Hello! " + message
+      }
+
+      expected = [
+        "2016-04-21 02:58:41 +0000 [error]: This is test\n",
+        "2016-04-21 02:58:41 +0000 [info]: Hello! This is test\n",
+        "2016-04-21 02:58:42 +0000 [error]: This is test\n",
+        "2016-04-21 02:58:42 +0000 [info]: Hello! This is test\n",
+        "2016-04-21 02:58:43 +0000 [error]: This is test\n",
+        "2016-04-21 02:58:43 +0000 [info]: Hello! This is test\n",
+      ]
+      assert_equal(expected, log.out.logs)
+    end
+  end
+
   def test_dup
     dl_opts = {}
     dl_opts[:log_level] = ServerEngine::DaemonLogger::TRACE
@@ -493,7 +537,7 @@ class LogTest < Test::Unit::TestCase
     end
   end
 
-  def test_log_rotates_specifed_size_with_logdevio
+  def test_log_rotates_specified_size_with_logdevio
     with_timezone('utc') do
       rotate_age = 2
       rotate_size = 100
@@ -540,7 +584,7 @@ end
 class PluginLoggerTest < Test::Unit::TestCase
   def setup
     @log_device = Fluent::Test::DummyLogDevice.new
-    @timestamp = Time.parse("2016-04-21 11:58:41 +0900")
+    @timestamp = Time.parse("2016-04-21 02:58:41 +0000")
     @timestamp_str = @timestamp.strftime("%Y-%m-%d %H:%M:%S %z")
     Timecop.freeze(@timestamp)
     dl_opts = {}
@@ -744,12 +788,6 @@ class PluginLoggerTest < Test::Unit::TestCase
       @log.disable_events(Thread.current)
     end
 
-    def test_time_format
-      assert_equal(@log.time_format, @logger.time_format)
-      @log.time_format = "time_format"
-      assert_equal(@log.time_format, @logger.time_format)
-    end
-
     def test_event
       mock(@logger).event(Fluent::Log::LEVEL_TRACE, { key: "value" })
       @log.event(Fluent::Log::LEVEL_TRACE, { key: "value" })
@@ -792,6 +830,38 @@ class PluginLoggerTest < Test::Unit::TestCase
       assert_equal(@log.optional_attrs, @logger.optional_attrs)
       @log.optional_attrs = "optional_attrs"
       assert_equal(@log.optional_attrs, @logger.optional_attrs)
+    end
+  end
+
+  sub_test_case "partially delegated" do
+    def setup
+      super
+      @log = Fluent::PluginLogger.new(@logger)
+    end
+
+    data(
+      text: [:text, "2016-04-21 02:58:41 +0000 [info]: yaaay\n"],
+      json: [:json, %Q({"time":"2016-04-21 02:58:41 +0000","level":"info","message":"yaaay"}\n)],
+    )
+    def test_format(data)
+      fmt, expected_log_line = data
+      with_timezone('utc') {
+        @log.format = fmt
+        @log.info "yaaay"
+      }
+      assert{ @log_device.logs.include? expected_log_line }
+    end
+
+    data(
+      text: [:text, "2016 [info]: yaaay\n"],
+      json: [:json, %Q({"time":"2016","level":"info","message":"yaaay"}\n)],
+    )
+    def test_time_format(data)
+      fmt, expected_log_line = data
+      @log.format = fmt
+      @log.time_format = "%Y"
+      @log.info "yaaay"
+      assert{ @log_device.logs.include? expected_log_line }
     end
   end
 end

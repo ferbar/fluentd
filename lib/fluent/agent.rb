@@ -41,7 +41,7 @@ module Fluent
       # from plugins which DOES emit, then DOESN'T emit
       # (input -> output w/ router -> filter -> output w/o router)
       # for start: use this order DESC
-      #   (because plugins which appears later in configurations will receive events from plugins which appears ealier)
+      #   (because plugins which appears later in configurations will receive events from plugins which appears earlier)
       # for stop/before_shutdown/shutdown/after_shutdown/close/terminate: use this order ASC
       @lifecycle_cache = nil
 
@@ -62,7 +62,9 @@ module Fluent
 
       # initialize <match> and <filter> elements
       conf.elements('filter', 'match').each { |e|
-        next if e.for_another_worker?
+        if !Fluent::Engine.supervisor_mode && e.for_another_worker?
+          next
+        end
         pattern = e.arg.empty? ? '**' : e.arg
         type = e['@type']
         raise ConfigError, "Missing '@type' parameter on <#{e.name}> directive" unless type

@@ -14,13 +14,19 @@ class CounterStoreTest < ::Test::Unit::TestCase
     @now = Fluent::EventTime.now
   end
 
-  shutdown do
+  teardown do
     Timecop.return
   end
 
   def extract_value_from_counter(counter, key)
     store = counter.instance_variable_get(:@storage).instance_variable_get(:@store)
     store[key]
+  end
+
+  def travel(sec)
+    # Since Timecop.travel() causes test failures on Windows/AppVeyor by inducing
+    # rounding errors to Time.now, we need to use Timecop.freeze() instead.
+    Timecop.freeze(Time.now + sec)
   end
 
   sub_test_case 'init' do
@@ -83,7 +89,7 @@ class CounterStoreTest < ::Test::Unit::TestCase
       assert_equal nil, @store.get('unknown_key')
     end
 
-    test "raise a error when when a passed key doesn't exist and raise_error option is true" do
+    test "raise a error when a passed key doesn't exist and raise_error option is true" do
       assert_raise Fluent::Counter::UnknownKey do
         @store.get('unknown_key', raise_error: true)
       end
@@ -142,7 +148,7 @@ class CounterStoreTest < ::Test::Unit::TestCase
     test 'increment or decrement a value in the counter' do |value|
       key = Fluent::Counter::Store.gen_key(@scope, @name)
       @store.init(key, @init_data)
-      Timecop.travel(@travel_sec)
+      travel(@travel_sec)
       v = @store.inc(key, { 'value' => value })
 
       assert_equal value, v['total']
@@ -198,7 +204,7 @@ class CounterStoreTest < ::Test::Unit::TestCase
     end
 
     test 'reset a value in the counter' do
-      Timecop.travel(@travel_sec)
+      travel(@travel_sec)
 
       v = @store.reset(@key)
       assert_equal @travel_sec, v['elapsed_time']
@@ -222,7 +228,7 @@ class CounterStoreTest < ::Test::Unit::TestCase
 
     test 'reset a value after `reset_interval` passed' do
       first_travel_sec = 5
-      Timecop.travel(first_travel_sec) # jump time less than reset_interval
+      travel(first_travel_sec) # jump time less than reset_interval
       v = @store.reset(@key)
 
       assert_equal false, v['success']
@@ -232,7 +238,7 @@ class CounterStoreTest < ::Test::Unit::TestCase
       assert_equal @now, Fluent::EventTime.new(*store['last_reset_at'])
 
       # time is passed greater than reset_interval
-      Timecop.travel(@travel_sec)
+      travel(@travel_sec)
       v = @store.reset(@key)
       assert_true v['success']
       assert_equal @travel_sec + first_travel_sec, v['elapsed_time']

@@ -378,6 +378,30 @@ class OutputTest < Test::Unit::TestCase
       assert { logs.any? { |log| log.include?("${chunk_id} is not allowed in this plugin") } }
     end
 
+    test '#extract_placeholders logs warn message with not replaced key' do
+      @i.configure(config_element('ROOT', '', {}, [config_element('buffer', '')]))
+      tmpl = "/mypath/${key1}/test"
+      t = event_time('2016-04-11 20:30:00 +0900')
+      v = { key1: "value1" }
+      m = create_metadata(timekey: t, tag: 'fluentd.test.output', variables: v)
+      @i.extract_placeholders(tmpl, m)
+      logs = @i.log.out.logs
+
+      assert { logs.any? { |log| log.include?("chunk key placeholder 'key1' not replaced. template:#{tmpl}") } }
+    end
+
+    test '#extract_placeholders logs warn message with not replaced key if variables exist and chunk_key is not empty' do
+      @i.configure(config_element('ROOT', '', {}, [config_element('buffer', 'key1')]))
+      tmpl = "/mypath/${key1}/${key2}/test"
+      t = event_time('2016-04-11 20:30:00 +0900')
+      v = { key1: "value1" }
+      m = create_metadata(timekey: t, tag: 'fluentd.test.output', variables: v)
+      @i.extract_placeholders(tmpl, m)
+      logs = @i.log.out.logs
+
+      assert { logs.any? { |log| log.include?("chunk key placeholder 'key2' not replaced. template:#{tmpl}") } }
+    end
+
     sub_test_case '#placeholder_validators' do
       test 'returns validators for time, tag and keys when a template has placeholders even if plugin is not configured with these keys' do
         @i.configure(config_element('ROOT', '', {}, [config_element('buffer', '')]))
@@ -547,7 +571,7 @@ class OutputTest < Test::Unit::TestCase
       assert_equal 86400, s
       assert_equal :day, t
       assert_equal '%d', e
-      s, t, e = @i.get_placeholders_time("my birthiday! at %F")
+      s, t, e = @i.get_placeholders_time("my birthday! at %F")
       assert_equal 86400, s
       assert_equal :day, t
       assert_equal '%d', e
@@ -828,34 +852,60 @@ class OutputTest < Test::Unit::TestCase
       assert_equal :interval, @i.instance_variable_get(:@flush_mode)
     end
 
-    test "Warn if primary type is different from secondary type and either primary or secondary has custom_format" do
-      o = create_output(:buffered)
-      mock(o.log).warn("secondary type should be same with primary one",
-                                { primary: o.class.to_s, secondary: "Fluent::Plugin::TestOutput" })
+    sub_test_case 'configure secondary' do
+      test "Warn if primary type is different from secondary type and either primary or secondary has custom_format" do
+        o = create_output(:buffered)
+        mock(o.log).warn("Use different plugin for secondary. Check the plugin works with primary like secondary_file",
+                         { primary: o.class.to_s, secondary: "Fluent::Plugin::TestOutput" })
 
-      o.configure(config_element('ROOT','',{},[config_element('secondary','',{'@type'=>'test', 'name' => "cool"})]))
-      assert_not_nil o.instance_variable_get(:@secondary)
+        o.configure(config_element('ROOT','',{},[config_element('secondary','',{'@type'=>'test', 'name' => "cool"})]))
+        assert_not_nil o.instance_variable_get(:@secondary)
+      end
+
+      test "don't warn if primary type is the same as secondary type" do
+        o = Fluent::Plugin::TestOutput.new
+        mock(o.log).warn("Use different plugin for secondary. Check the plugin works with primary like secondary_file",
+                         { primary: o.class.to_s, secondary: "Fluent::Plugin::TestOutput" }).never
+
+        o.configure(config_element('ROOT','',{'name' => "cool2"},
+                                   [config_element('secondary','',{'@type'=>'test', 'name' => "cool"}),
+                                    config_element('buffer','',{'@type'=>'memory'})]
+                                  ))
+        assert_not_nil o.instance_variable_get(:@secondary)
+      end
+
+      test "don't warn if primary type is different from secondary type and both don't have custom_format" do
+        o = create_output(:standard)
+        mock(o.log).warn("Use different plugin for secondary. Check the plugin works with primary like secondary_file",
+                         { primary: o.class.to_s, secondary: "Fluent::Plugin::TestOutput" }).never
+
+        o.configure(config_element('ROOT','',{},[config_element('secondary','',{'@type'=>'test', 'name' => "cool"})]))
+        assert_not_nil o.instance_variable_get(:@secondary)
+      end
+
+      test "raise configuration error if secondary type specifies non buffered output" do
+        o = create_output(:standard)
+        assert_raise Fluent::ConfigError do
+          o.configure(config_element('ROOT','',{},[config_element('secondary','',{'@type'=>'copy'})]))
+        end
+      end
+    end
+  end
+
+  test 'raises an error if timekey is less than equal 0' do
+    i = create_output(:delayed)
+    assert_raise Fluent::ConfigError.new("<buffer ...> argument includes 'time', but timekey is not configured") do
+      i.configure(config_element('ROOT','',{},[config_element('buffer', 'time', { "timekey" => nil })]))
     end
 
-    test "don't warn if primary type is the same as secondary type" do
-      o = Fluent::Plugin::TestOutput.new
-      mock(o.log).warn("secondary type should be same with primary one",
-                                { primary: o.class.to_s, secondary: "Fluent::Plugin::TestOutput" }).never
-
-      o.configure(config_element('ROOT','',{'name' => "cool2"},
-                                 [config_element('secondary','',{'@type'=>'test', 'name' => "cool"}),
-                                  config_element('buffer','',{'@type'=>'memory'})]
-                                ))
-      assert_not_nil o.instance_variable_get(:@secondary)
+    i = create_output(:delayed)
+    assert_raise Fluent::ConfigError.new('timekey should be greater than 0. current timekey: 0.0') do
+      i.configure(config_element('ROOT','',{},[config_element('buffer', 'time', { "timekey" => 0 })]))
     end
 
-    test "don't warn if primary type is different from secondary type and both don't have custom_format" do
-      o = create_output(:standard)
-      mock(o.log).warn("secondary type should be same with primary one",
-                                { primary: o.class.to_s, secondary: "Fluent::Plugin::TestOutput" }).never
-
-      o.configure(config_element('ROOT','',{},[config_element('secondary','',{'@type'=>'test', 'name' => "cool"})]))
-      assert_not_nil o.instance_variable_get(:@secondary)
+    i = create_output(:delayed)
+    assert_raise Fluent::ConfigError.new('timekey should be greater than 0. current timekey: -1.0') do
+      i.configure(config_element('ROOT','',{},[config_element('buffer', 'time', { "timekey" => -1 })]))
     end
   end
 

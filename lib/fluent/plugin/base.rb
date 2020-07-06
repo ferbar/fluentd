@@ -29,6 +29,7 @@ module Fluent
       attr_accessor :under_plugin_development
 
       def initialize
+        @log = nil
         super
         @_state = State.new(false, false, false, false, false, false, false, false, false)
         @_context_router = nil
@@ -51,10 +52,15 @@ module Fluent
       end
 
       def configure(conf)
-        if conf.respond_to?(:for_this_worker?) && conf.for_this_worker?
-          system_config_override(workers: 1)
+        if Fluent::Engine.supervisor_mode || (conf.respond_to?(:for_this_worker?) && conf.for_this_worker?)
+          workers = if conf.target_worker_ids && !conf.target_worker_ids.empty?
+                      conf.target_worker_ids.size
+                    else
+                      1
+                    end
+          system_config_override(workers: workers)
         end
-        super
+        super(conf, system_config.strict_config_value)
         @_state ||= State.new(false, false, false, false, false, false, false, false, false)
         @_state.configure = true
         self
@@ -81,6 +87,12 @@ module Fluent
       end
 
       def start
+        # By initialization order, plugin logger is created before set log_event_enabled.
+        # It causes '@id' specified plugin, it uses plugin logger instead of global logger, ignores `<label @FLUENT_LOG>` setting.
+        # This is adhoc approach but impact is minimal.
+        if @log.is_a?(Fluent::PluginLogger) && $log.respond_to?(:log_event_enabled) # log_event_enabled check for tests
+          @log.log_event_enabled = $log.log_event_enabled
+        end
         @_state.start = true
         self
       end
@@ -174,6 +186,11 @@ module Fluent
         #   To emulate normal inspect behavior `ruby -e'o=Object.new;p o;p (o.__id__<<1).to_s(16)'`.
         #   https://github.com/ruby/ruby/blob/trunk/gc.c#L788
         "#<%s:%014x>" % [self.class.name, '0x%014x' % (__id__ << 1)]
+      end
+
+      def reloadable_plugin?
+        # Engine can't capture all class variables. so it's forbbiden to use class variables in each plugins if enabling reload.
+        self.class.class_variables.empty?
       end
     end
   end

@@ -157,7 +157,7 @@ class TestConfigElement < ::Test::Unit::TestCase
                              Fluent::Config::Element.new('ROOT', 'mydata', {}, [])],
            "differ keys" => [Fluent::Config::Element.new('ROOT', 'mydata', {}, []),
                              Fluent::Config::Element.new('ROOT', 'mydata', {"k1" => "v1"}, [])],
-           "differ elemnts" =>
+           "differ elements" =>
            [Fluent::Config::Element.new('ROOT', 'mydata', {"k1" => "v1"}, []),
             Fluent::Config::Element.new('ROOT', 'mydata', {"k1" => "v1"}, [
               Fluent::Config::Element.new('test', 'mydata', {'k3' => 'v3'}, [])
@@ -253,6 +253,24 @@ CONF
       dump = expected
       assert_not_equal(e.inspect, e.to_s)
       assert_equal(dump, e.to_s)
+    end
+
+    test 'dump nil and default for v1' do
+      expected = <<-CONF
+<ROOT>
+  str1 
+  str2 defstring
+</ROOT>
+CONF
+      e = element('ROOT', '', {'str1' => nil, "str2" => :default}, [])
+      type_lookup = ->(type){ Fluent::Configurable.lookup_type(type) }
+      p = Fluent::Config::ConfigureProxy.new("test", type_lookup: type_lookup)
+      p.config_param :str1, :string
+      p.config_param :str2, :string, default: "defstring"
+      e.corresponding_proxies << p
+      e.v1_config = true
+      assert_not_equal(e.inspect, e.to_s)
+      assert_equal(expected, e.to_s)
     end
   end
 
@@ -406,11 +424,11 @@ CONF
     test 'set target_worker_id recursively' do
       e = element('label', '@mytest', {}, [ element('filter', '**'), element('match', '**', {}, [ element('store'), element('store') ]) ])
       e.set_target_worker_id(1)
-      assert_equal 1, e.target_worker_id
-      assert_equal 1, e.elements[0].target_worker_id
-      assert_equal 1, e.elements[1].target_worker_id
-      assert_equal 1, e.elements[1].elements[0].target_worker_id
-      assert_equal 1, e.elements[1].elements[1].target_worker_id
+      assert_equal [1], e.target_worker_ids
+      assert_equal [1], e.elements[0].target_worker_ids
+      assert_equal [1], e.elements[1].target_worker_ids
+      assert_equal [1], e.elements[1].elements[0].target_worker_ids
+      assert_equal [1], e.elements[1].elements[1].target_worker_ids
     end
   end
 
@@ -434,9 +452,21 @@ CONF
       assert e.for_this_worker?
     end
 
+    test 'target_worker_ids includes current worker_id' do
+      e = element()
+      e.set_target_worker_ids([0])
+      assert e.for_this_worker?
+    end
+
     test 'target_worker_id != current worker_id' do
       e = element()
       e.set_target_worker_id(1)
+      assert_false e.for_this_worker?
+    end
+
+    test 'target_worker_ids does not includes current worker_id' do
+      e = element()
+      e.set_target_worker_ids([1, 2])
       assert_false e.for_this_worker?
     end
 
@@ -453,9 +483,21 @@ CONF
       assert_false e.for_another_worker?
     end
 
+    test 'target_worker_ids contains current worker_id' do
+      e = element()
+      e.set_target_worker_ids([0, 1])
+      assert_false e.for_another_worker?
+    end
+
     test 'target_worker_id != current worker_id' do
       e = element()
       e.set_target_worker_id(1)
+      assert e.for_another_worker?
+    end
+
+    test 'target_worker_ids does not contains current worker_id' do
+      e = element()
+      e.set_target_worker_ids([1, 2])
       assert e.for_another_worker?
     end
 
